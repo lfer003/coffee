@@ -113,7 +113,9 @@ const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return 
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
 
 const pad = n => String(n).padStart(2, "0");
-const dayKey = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const TZ = "Pacific/Auckland";   // everyone's "today" follows this clock, whatever device they use
+const dayKey = d => new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+const todayKey = () => dayKey(new Date());
 const parseKey = s => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
 const pretty = (d, o) => d.toLocaleDateString(undefined, o || { weekday: "short", month: "short", day: "numeric" });
 
@@ -173,6 +175,7 @@ async function update(mutate) {
     await load();
     if (!state.fromApi) { setStatus("Couldn't reach GitHub. Try again."); return; }
     const entries = mutate(state.entries.slice());
+    if (!entries) { setStatus("Nothing changed."); return; }
     const body = { message: "Update coffee log", content: toB64(JSON.stringify({ entries }, null, 2)) };
     if (state.sha) body.sha = state.sha;
     const r = await fetch(`https://api.github.com/repos/${info.owner}/${info.repo}/contents/${FILE}`, {
@@ -208,7 +211,7 @@ function nextAfter(entries) {
 }
 
 function render() {
-  const today = dayKey(new Date());
+  const today = todayKey();
   const todays = state.entries.find(e => e.date === today);
   const before = state.entries.filter(e => e.date !== today);
   const suggested = nextAfter(before);
@@ -233,17 +236,30 @@ function render() {
     b.type = "button";
     b.textContent = `${name} paid`;
     if (!todays && name === suggested) b.classList.add("suggested");
-    b.onclick = () => update(es => es.filter(e => e.date !== today).concat({ date: today, who: name }));
+    b.onclick = () => update(es => {
+      const day = todayKey();   // worked out at the moment of the tap, never from an old page
+      const ex = es.find(e => e.date === day);
+      if (ex && ex.who !== name) {
+        const was = ex.free ? "A free coffee" : ex.who + " paid";
+        if (!confirm(`${was} is already recorded for today. Replace it with ${name}?`)) return null;
+      }
+      return es.filter(e => e.date !== day).concat({ date: day, who: name });
+    });
     box.appendChild(b);
   });
   const f = document.createElement("button");
   f.type = "button"; f.textContent = "Free coffee";
-  f.onclick = () => update(es => es.filter(e => e.date !== today).concat({ date: today, who: null, free: true }));
+  f.onclick = () => update(es => {
+    const day = todayKey();
+    const ex = es.find(e => e.date === day);
+    if (ex && !ex.free && !confirm(`${ex.who} paid is already recorded for today. Replace it with a free coffee?`)) return null;
+    return es.filter(e => e.date !== day).concat({ date: day, who: null, free: true });
+  });
   box.appendChild(f);
   if (todays) {
     const u = document.createElement("button");
     u.type = "button"; u.className = "quiet"; u.textContent = "Undo today";
-    u.onclick = () => update(es => es.filter(e => e.date !== today));
+    u.onclick = () => update(es => { const day = todayKey(); return es.filter(e => e.date !== day); });
     box.appendChild(u);
   }
 
@@ -277,7 +293,8 @@ function render() {
   });
 }
 
-$("date").textContent = pretty(new Date(), { weekday: "long", month: "long", day: "numeric" });
+const showDate = () => { $("date").textContent = pretty(parseKey(todayKey()), { weekday: "long", month: "long", day: "numeric" }); };
+showDate();
 $("tokenInput").value = lsGet("token") || "";
 $("repoInput").value = lsGet("repo") || "";
 $("saveSettings").onclick = () => {
@@ -288,6 +305,11 @@ $("saveSettings").onclick = () => {
 };
 
 load().then(render);
+
+// A tab left open overnight refreshes itself when you come back to it.
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) { showDate(); load().then(render); }
+});
 </script>
 </body>
 </html>
